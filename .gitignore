@@ -11,6 +11,10 @@
 # Temporary mount/extract workspace.
 /work/
 
+# Local encrypted or decrypted operator secrets.
+/ansible/vault/*.yml
+!/ansible/vault/*.example.yml
+
 # Editor and OS noise.
 *~
 .DS_Store

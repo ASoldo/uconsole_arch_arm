@@ -21,15 +21,15 @@ part_path() {
 
 DEVICE="${1:-}"
 UCONSOLE_USER="${UCONSOLE_USER:-uconsole}"
-[[ -n "$DEVICE" ]] || die "usage: UCONSOLE_PASSWORD=... [UCONSOLE_USER=uconsole] I_UNDERSTAND_THIS_WIPES=YES $0 /dev/sdX"
+[[ -n "$DEVICE" ]] || die "usage: ANSIBLE_VAULT_FILE=... [UCONSOLE_USER=uconsole] I_UNDERSTAND_THIS_WIPES=YES $0 /dev/sdX"
 [[ "${I_UNDERSTAND_THIS_WIPES:-}" == "YES" ]] || die "set I_UNDERSTAND_THIS_WIPES=YES to allow destructive writes"
-[[ -n "${UCONSOLE_PASSWORD:-}" ]] || die "set UCONSOLE_PASSWORD for root and UCONSOLE_USER passwords"
+[[ -n "${ANSIBLE_VAULT_FILE:-}" || -n "${UCONSOLE_PASSWORD:-}" ]] || die "set ANSIBLE_VAULT_FILE or UCONSOLE_PASSWORD"
 [[ "$UCONSOLE_USER" =~ ^[a-z_][a-z0-9_-]*$ ]] || die "UCONSOLE_USER must be a simple Linux username"
 [[ "$UCONSOLE_USER" != "root" ]] || die "UCONSOLE_USER must not be root"
 [[ -b "$DEVICE" ]] || die "$DEVICE is not a block device"
 [[ "$DEVICE" != /dev/nvme* ]] || die "refusing to operate on NVMe device $DEVICE"
 
-for cmd in lsblk findmnt wipefs sfdisk partprobe udevadm mkfs.vfat mkfs.ext4 bsdtar tar arch-chroot blkid install qemu-aarch64-static; do
+for cmd in lsblk findmnt wipefs sfdisk partprobe udevadm mkfs.vfat mkfs.ext4 bsdtar tar arch-chroot blkid install qemu-aarch64-static ansible-playbook; do
   need "$cmd"
 done
 
@@ -52,9 +52,40 @@ BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TARBALL="${TARBALL:-$BASE_DIR/cache/ArchLinuxARM-rpi-aarch64-latest.tar.gz}"
 SUPPORT_TAR="${SUPPORT_TAR:-$BASE_DIR/backups/clockworkpi-20260430/clockworkpi-current-support-files.tar.gz}"
 VENDOR_BOOT_TAR="${VENDOR_BOOT_TAR:-$BASE_DIR/backups/clockworkpi-20260430/uconsole-vendor-boot-kernel.tar.gz}"
+ANSIBLE_VAULT_FILE="${ANSIBLE_VAULT_FILE:-}"
+ANSIBLE_VAULT_PASSWORD_FILE="${ANSIBLE_VAULT_PASSWORD_FILE:-}"
 [[ -s "$TARBALL" ]] || die "missing Arch Linux ARM tarball: $TARBALL"
 [[ -s "$SUPPORT_TAR" ]] || die "missing ClockworkPi support backup: $SUPPORT_TAR"
 [[ -s "$VENDOR_BOOT_TAR" ]] || die "missing uConsole vendor boot/kernel backup: $VENDOR_BOOT_TAR"
+if [[ -n "$ANSIBLE_VAULT_FILE" ]]; then
+  [[ -f "$ANSIBLE_VAULT_FILE" ]] || die "missing Ansible Vault vars file: $ANSIBLE_VAULT_FILE"
+fi
+if [[ -n "$ANSIBLE_VAULT_PASSWORD_FILE" ]]; then
+  [[ -f "$ANSIBLE_VAULT_PASSWORD_FILE" ]] || die "missing Ansible Vault password file: $ANSIBLE_VAULT_PASSWORD_FILE"
+fi
+
+run_ansible_rootfs() {
+  local rootfs_type="$1"
+  local -a ansible_args=(
+    ansible-playbook
+    -i "$BASE_DIR/ansible/inventory/localhost.yml"
+    "$BASE_DIR/ansible/playbooks/uconsole-rootfs.yml"
+    -e "target_root=$ROOT_MNT"
+    -e "uconsole_rootfs_type=$rootfs_type"
+    -e "uconsole_kernel_release=6.12.62-v8+"
+  )
+
+  if [[ -n "$ANSIBLE_VAULT_FILE" ]]; then
+    ansible_args+=(-e "@$ANSIBLE_VAULT_FILE")
+    if [[ -n "$ANSIBLE_VAULT_PASSWORD_FILE" ]]; then
+      ansible_args+=(--vault-password-file "$ANSIBLE_VAULT_PASSWORD_FILE")
+    else
+      ansible_args+=(--ask-vault-pass)
+    fi
+  fi
+
+  env UCONSOLE_USER="$UCONSOLE_USER" UCONSOLE_PASSWORD="${UCONSOLE_PASSWORD:-}" "${ansible_args[@]}"
+}
 
 BOOT_MNT="/mnt/uconsole-arch-boot"
 ROOT_MNT="/mnt/uconsole-arch-root"
@@ -147,109 +178,8 @@ mount -t devpts devpts "$ROOT_MNT/dev/pts"
 mount -t proc proc "$ROOT_MNT/proc"
 mount -t sysfs sys "$ROOT_MNT/sys"
 
-printf '\nInstalling desktop and enabling services inside ARM rootfs...\n'
-env UCONSOLE_PASSWORD="$UCONSOLE_PASSWORD" UCONSOLE_USER="$UCONSOLE_USER" arch-chroot "$ROOT_MNT" /bin/bash <<'CHROOT'
-set -euo pipefail
-: "${UCONSOLE_USER:=uconsole}"
-pacman-key --init
-pacman-key --populate archlinuxarm
-pacman -Syu --noconfirm
-pacman -S --needed --noconfirm sudo networkmanager modemmanager openssh linux-firmware xorg-server xorg-xinit xorg-xrandr xorg-xsetroot xorg-xinput xterm alacritty lightdm lightdm-gtk-greeter i3-wm i3status rofi python python-gobject ttf-dejavu terminus-font vim nano git zsh inetutils
-pacman -S --needed --noconfirm powerline-fonts || true
-pacman -S --needed --noconfirm raspberrypi-utils || true
-if ! pacman -S --needed --noconfirm bumblebee-status; then
-  pacman -S --needed --noconfirm python-pip
-  python -m pip install --break-system-packages bumblebee-status
-fi
-
-groups_to_add=()
-for group in wheel audio video input render storage power uucp users; do
-  if getent group "$group" >/dev/null; then
-    groups_to_add+=("$group")
-  fi
-done
-group_csv="$(IFS=,; printf '%s' "${groups_to_add[*]}")"
-if ! id "$UCONSOLE_USER" >/dev/null 2>&1; then
-  useradd -m -G "$group_csv" -s /usr/bin/zsh "$UCONSOLE_USER"
-else
-  usermod -aG "$group_csv" "$UCONSOLE_USER"
-  usermod -s /usr/bin/zsh "$UCONSOLE_USER"
-fi
-printf 'root:%s\n%s:%s\n' "$UCONSOLE_PASSWORD" "$UCONSOLE_USER" "$UCONSOLE_PASSWORD" | chpasswd
-sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
-
-user_home="/home/$UCONSOLE_USER"
-if [[ ! -d "$user_home/.oh-my-zsh" ]]; then
-  git clone --depth 1 https://github.com/ohmyzsh/ohmyzsh.git "$user_home/.oh-my-zsh"
-fi
-cat > "$user_home/.zshrc" <<'EOF'
-export ZSH="$HOME/.oh-my-zsh"
-export LANG="${LANG:-C.UTF-8}"
-[[ "$LANG" = "C" ]] && export LANG="C.UTF-8"
-export LC_CTYPE="${LC_CTYPE:-C.UTF-8}"
-ZSH_THEME="agnoster"
-plugins=(git)
-
-if [[ -s "$ZSH/oh-my-zsh.sh" ]]; then
-  source "$ZSH/oh-my-zsh.sh"
-fi
-
-export EDITOR="vim"
-export VISUAL="vim"
-export PAGER="less"
-path=("$HOME/.local/bin" "$HOME/bin" $path)
-typeset -U path PATH
-EOF
-
-install -d -m 0755 "$user_home/.config/i3"
-cat > "$user_home/.xinitrc" <<'EOF'
-exec i3
-EOF
-cat > "$user_home/.config/i3/config" <<'EOF'
-set $mod Mod1
-font pango:DejaVu Sans Mono 9
-
-exec_always --no-startup-id xrandr --output DSI-1 --primary --rotate right
-
-bindsym $mod+Return exec alacritty
-bindsym $mod+KP_Enter exec alacritty
-bindsym $mod+space exec rofi -show drun
-bindsym $mod+d exec rofi -show drun
-bindsym $mod+f fullscreen toggle
-bindsym $mod+Shift+q kill
-bindsym $mod+Shift+r restart
-bindsym $mod+Shift+e exec "i3-nagbar -t warning -m 'Exit i3?' -b 'Yes' 'i3-msg exit'"
-
-floating_modifier $mod
-bindsym $mod+h focus left
-bindsym $mod+j focus down
-bindsym $mod+k focus up
-bindsym $mod+l focus right
-bindsym $mod+Shift+h move left
-bindsym $mod+Shift+j move down
-bindsym $mod+Shift+k move up
-bindsym $mod+Shift+l move right
-
-bindsym $mod+1 workspace number 1
-bindsym $mod+2 workspace number 2
-bindsym $mod+3 workspace number 3
-bindsym $mod+4 workspace number 4
-bindsym $mod+5 workspace number 5
-bindsym $mod+Shift+1 move container to workspace number 1
-bindsym $mod+Shift+2 move container to workspace number 2
-bindsym $mod+Shift+3 move container to workspace number 3
-bindsym $mod+Shift+4 move container to workspace number 4
-bindsym $mod+Shift+5 move container to workspace number 5
-
-bar {
-  position top
-  status_command bumblebee-status -m cpu memory battery date time -t powerline -p time.format="%H:%M" date.format="%Y-%m-%d"
-}
-EOF
-chown -R "$UCONSOLE_USER:$UCONSOLE_USER" "$user_home/.config" "$user_home/.xinitrc" "$user_home/.zshrc" "$user_home/.oh-my-zsh"
-
-systemctl enable sshd NetworkManager ModemManager lightdm clockworkpi-audio-patch.service clockworkpi-audio-shutdown.service uconsole-4g-cm4.service
-CHROOT
+printf '\nConfiguring Arch Linux ARM rootfs with Ansible...\n'
+run_ansible_rootfs ext4
 
 sync
 printf '\nPrepared %s for uConsole Arch Linux ARM.\n' "$DEVICE"

@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${UCONSOLE_USER:?UCONSOLE_USER is required}"
+: "${UCONSOLE_PASSWORD:?UCONSOLE_PASSWORD is required}"
+
+groups_to_add=()
+for group in wheel audio video input render storage power uucp users; do
+  if getent group "$group" >/dev/null; then
+    groups_to_add+=("$group")
+  fi
+done
+group_csv="$(IFS=,; printf '%s' "${groups_to_add[*]}")"
+
+if ! id "$UCONSOLE_USER" >/dev/null 2>&1; then
+  useradd -m -G "$group_csv" -s /usr/bin/zsh "$UCONSOLE_USER"
+else
+  usermod -aG "$group_csv" "$UCONSOLE_USER"
+  usermod -s /usr/bin/zsh "$UCONSOLE_USER"
+fi
+
+printf 'root:%s\n%s:%s\n' "$UCONSOLE_PASSWORD" "$UCONSOLE_USER" "$UCONSOLE_PASSWORD" | chpasswd

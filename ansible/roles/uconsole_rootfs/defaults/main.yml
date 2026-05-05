@@ -1,0 +1,59 @@
+---
+target_root: ""
+uconsole_user: "{{ lookup('ansible.builtin.env', 'UCONSOLE_USER') | default('uconsole', true) }}"
+uconsole_password: "{{ lookup('ansible.builtin.env', 'UCONSOLE_PASSWORD') }}"
+uconsole_hostname: arch-uconsole
+uconsole_keymap: us
+uconsole_console_font: ter-v16n
+uconsole_kernel_release: 6.12.62-v8+
+uconsole_rootfs_type: btrfs
+uconsole_run_chroot_commands: true
+uconsole_bumblebee_theme: powerline
+uconsole_i3_modifier: Mod1
+uconsole_i3_display_output: DSI-1
+uconsole_i3_rotate_display: true
+uconsole_regdom: HR
+
+uconsole_base_packages:
+  - sudo
+  - networkmanager
+  - modemmanager
+  - openssh
+  - linux-firmware
+  - mkinitcpio
+  - xorg-server
+  - xorg-xinit
+  - xorg-xrandr
+  - xorg-xsetroot
+  - xorg-xinput
+  - xterm
+  - alacritty
+  - lightdm
+  - lightdm-gtk-greeter
+  - i3-wm
+  - i3status
+  - rofi
+  - python
+  - python-gobject
+  - ttf-dejavu
+  - terminus-font
+  - vim
+  - nano
+  - git
+  - zsh
+  - inetutils
+
+uconsole_btrfs_packages:
+  - btrfs-progs
+
+uconsole_optional_packages:
+  - powerline-fonts
+  - raspberrypi-utils
+
+uconsole_services:
+  - sshd
+  - NetworkManager
+  - ModemManager
+  - lightdm
+  - clockworkpi-audio-patch.service
+  - clockworkpi-audio-shutdown.service

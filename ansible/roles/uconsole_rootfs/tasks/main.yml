@@ -1,0 +1,280 @@
+---
+- name: Validate requested setup
+  ansible.builtin.assert:
+    that:
+      - target_root | length > 1
+      - target_root.startswith('/')
+      - target_root != '/'
+      - uconsole_user is match('^[a-z_][a-z0-9_-]*$')
+      - uconsole_user != 'root'
+      - uconsole_password | length > 0
+      - uconsole_rootfs_type in ['btrfs', 'ext4']
+    fail_msg: "Set target_root plus uconsole_user/uconsole_password from Ansible Vault or environment before running this playbook."
+
+- name: Inspect mounted rootfs
+  ansible.builtin.stat:
+    path: "{{ target_root }}/etc/pacman.conf"
+  register: uconsole_pacman_conf
+
+- name: Confirm target_root looks like an Arch Linux ARM rootfs
+  ansible.builtin.assert:
+    that:
+      - uconsole_pacman_conf.stat.exists
+      - uconsole_pacman_conf.stat.isreg
+    fail_msg: "{{ target_root }} does not look like an extracted Arch Linux ARM rootfs."
+
+- name: Copy qemu static interpreter into target rootfs
+  ansible.builtin.copy:
+    src: /usr/bin/qemu-aarch64-static
+    dest: "{{ target_root }}/usr/bin/qemu-aarch64-static"
+    mode: "0755"
+  when: uconsole_run_chroot_commands | bool
+
+- name: Configure hostname
+  ansible.builtin.copy:
+    content: "{{ uconsole_hostname }}\n"
+    dest: "{{ target_root }}/etc/hostname"
+    mode: "0644"
+
+- name: Configure virtual console
+  ansible.builtin.copy:
+    content: |
+      KEYMAP={{ uconsole_keymap }}
+      FONT={{ uconsole_console_font }}
+    dest: "{{ target_root }}/etc/vconsole.conf"
+    mode: "0644"
+
+- name: Allow pacman to run inside qemu chroot
+  ansible.builtin.lineinfile:
+    path: "{{ target_root }}/etc/pacman.conf"
+    regexp: "^#?DisableSandbox"
+    line: DisableSandbox
+    insertafter: "^\\[options\\]"
+
+- name: Initialize Arch Linux ARM pacman keys
+  ansible.builtin.command:
+    argv:
+      - arch-chroot
+      - "{{ target_root }}"
+      - /usr/bin/pacman-key
+      - --init
+  changed_when: false
+  when: uconsole_run_chroot_commands | bool
+
+- name: Populate Arch Linux ARM pacman keys
+  ansible.builtin.command:
+    argv:
+      - arch-chroot
+      - "{{ target_root }}"
+      - /usr/bin/pacman-key
+      - --populate
+      - archlinuxarm
+  changed_when: false
+  when: uconsole_run_chroot_commands | bool
+
+- name: Update target rootfs packages
+  ansible.builtin.command:
+    argv:
+      - arch-chroot
+      - "{{ target_root }}"
+      - /usr/bin/pacman
+      - -Syu
+      - --noconfirm
+  changed_when: true
+  when: uconsole_run_chroot_commands | bool
+
+- name: Install required target packages
+  ansible.builtin.command:
+    argv: >-
+      {{
+        ['arch-chroot', target_root, '/usr/bin/pacman', '-S', '--needed', '--noconfirm']
+        + uconsole_base_packages
+        + (uconsole_btrfs_packages if uconsole_rootfs_type == 'btrfs' else [])
+      }}
+  register: uconsole_required_packages
+  changed_when: "'there is nothing to do' not in (uconsole_required_packages.stdout | lower)"
+  when: uconsole_run_chroot_commands | bool
+
+- name: Install optional target packages
+  ansible.builtin.command:
+    argv: "{{ ['arch-chroot', target_root, '/usr/bin/pacman', '-S', '--needed', '--noconfirm', item] }}"
+  loop: "{{ uconsole_optional_packages }}"
+  register: uconsole_optional_package_results
+  changed_when: "'there is nothing to do' not in (uconsole_optional_package_results.stdout | default('') | lower)"
+  failed_when: false
+  when: uconsole_run_chroot_commands | bool
+
+- name: Install bumblebee-status from pacman
+  ansible.builtin.command:
+    argv:
+      - arch-chroot
+      - "{{ target_root }}"
+      - /usr/bin/pacman
+      - -S
+      - --needed
+      - --noconfirm
+      - bumblebee-status
+  register: uconsole_bumblebee_pacman
+  changed_when: "'there is nothing to do' not in (uconsole_bumblebee_pacman.stdout | lower)"
+  failed_when: false
+  when: uconsole_run_chroot_commands | bool
+
+- name: Install python-pip when bumblebee-status package is unavailable
+  ansible.builtin.command:
+    argv:
+      - arch-chroot
+      - "{{ target_root }}"
+      - /usr/bin/pacman
+      - -S
+      - --needed
+      - --noconfirm
+      - python-pip
+  when:
+    - uconsole_run_chroot_commands | bool
+    - uconsole_bumblebee_pacman.rc != 0
+
+- name: Install bumblebee-status from pip when pacman package is unavailable
+  ansible.builtin.command:
+    argv:
+      - arch-chroot
+      - "{{ target_root }}"
+      - /usr/bin/python
+      - -m
+      - pip
+      - install
+      - --break-system-packages
+      - bumblebee-status
+  when:
+    - uconsole_run_chroot_commands | bool
+    - uconsole_bumblebee_pacman.rc != 0
+
+- name: Write Btrfs mkinitcpio configuration
+  ansible.builtin.copy:
+    content: |
+      MODULES=(btrfs xor raid6_pq)
+      BINARIES=()
+      FILES=()
+      HOOKS=(base udev modconf block filesystems fsck)
+    dest: "{{ target_root }}/etc/mkinitcpio-uconsole.conf"
+    mode: "0644"
+  when: uconsole_rootfs_type == 'btrfs'
+
+- name: Run depmod for vendor kernel
+  ansible.builtin.command:
+    argv:
+      - arch-chroot
+      - "{{ target_root }}"
+      - /usr/bin/depmod
+      - "{{ uconsole_kernel_release }}"
+  changed_when: true
+  when: uconsole_run_chroot_commands | bool
+
+- name: Generate Btrfs initramfs for vendor kernel
+  ansible.builtin.command:
+    argv:
+      - arch-chroot
+      - "{{ target_root }}"
+      - /usr/bin/mkinitcpio
+      - -c
+      - /etc/mkinitcpio-uconsole.conf
+      - -k
+      - "{{ uconsole_kernel_release }}"
+      - -g
+      - /boot/initramfs-uconsole.img
+  changed_when: true
+  when:
+    - uconsole_run_chroot_commands | bool
+    - uconsole_rootfs_type == 'btrfs'
+
+- name: Install user configuration helper in target rootfs
+  ansible.builtin.template:
+    src: uconsole-configure-user.sh.j2
+    dest: "{{ target_root }}/usr/local/sbin/uconsole-configure-user"
+    mode: "0755"
+
+- name: Configure target user and password
+  ansible.builtin.command:
+    argv:
+      - arch-chroot
+      - "{{ target_root }}"
+      - /usr/local/sbin/uconsole-configure-user
+  environment:
+    UCONSOLE_USER: "{{ uconsole_user }}"
+    UCONSOLE_PASSWORD: "{{ uconsole_password }}"
+  no_log: true
+  changed_when: true
+  when: uconsole_run_chroot_commands | bool
+
+- name: Ensure user configuration directories exist
+  ansible.builtin.file:
+    path: "{{ target_root }}/home/{{ uconsole_user }}/{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - .config
+    - .config/i3
+
+- name: Install zsh configuration
+  ansible.builtin.template:
+    src: zshrc.j2
+    dest: "{{ target_root }}/home/{{ uconsole_user }}/.zshrc"
+    mode: "0644"
+
+- name: Install xinit configuration
+  ansible.builtin.copy:
+    content: "exec i3\n"
+    dest: "{{ target_root }}/home/{{ uconsole_user }}/.xinitrc"
+    mode: "0644"
+
+- name: Install i3 configuration
+  ansible.builtin.template:
+    src: i3.config.j2
+    dest: "{{ target_root }}/home/{{ uconsole_user }}/.config/i3/config"
+    mode: "0644"
+
+- name: Check for existing Oh My Zsh checkout
+  ansible.builtin.stat:
+    path: "{{ target_root }}/home/{{ uconsole_user }}/.oh-my-zsh/.git"
+  register: uconsole_omz_git
+
+- name: Clone Oh My Zsh in target rootfs
+  ansible.builtin.command:
+    argv:
+      - arch-chroot
+      - "{{ target_root }}"
+      - /usr/bin/git
+      - clone
+      - --depth
+      - "1"
+      - https://github.com/ohmyzsh/ohmyzsh.git
+      - "/home/{{ uconsole_user }}/.oh-my-zsh"
+  changed_when: true
+  when:
+    - uconsole_run_chroot_commands | bool
+    - not uconsole_omz_git.stat.exists
+
+- name: Own user configuration files
+  ansible.builtin.command:
+    argv:
+      - arch-chroot
+      - "{{ target_root }}"
+      - /usr/bin/chown
+      - -R
+      - "{{ uconsole_user }}:{{ uconsole_user }}"
+      - "/home/{{ uconsole_user }}/.config"
+      - "/home/{{ uconsole_user }}/.xinitrc"
+      - "/home/{{ uconsole_user }}/.zshrc"
+      - "/home/{{ uconsole_user }}/.oh-my-zsh"
+  changed_when: true
+  when: uconsole_run_chroot_commands | bool
+
+- name: Check whether uConsole 4G service is present
+  ansible.builtin.stat:
+    path: "{{ target_root }}/etc/systemd/system/uconsole-4g-cm4.service"
+  register: uconsole_4g_service
+
+- name: Enable target services
+  ansible.builtin.command:
+    argv: "{{ ['arch-chroot', target_root, '/usr/bin/systemctl', 'enable'] + uconsole_services + (['uconsole-4g-cm4.service'] if uconsole_4g_service.stat.exists else []) }}"
+  changed_when: true
+  when: uconsole_run_chroot_commands | bool

@@ -1,60 +1,64 @@
 # uConsole Arch Linux ARM
 
-Unofficial Arch Linux ARM setup for ClockworkPi uConsole. This repo documents the process we used to turn the stock uConsole support files plus the Arch Linux ARM Raspberry Pi root filesystem into an Arch-powered uConsole with display, keyboard, audio, backlight, charging rules, NetworkManager, and the CM4 4G module helper enabled.
+Unofficial, reproducible Arch Linux ARM setup for the ClockworkPi uConsole. The goal is to take the official Arch Linux ARM Raspberry Pi aarch64 root filesystem, add the ClockworkPi/uConsole boot and support files, and configure the result with Ansible so the final card boots into a usable uConsole system.
 
-This is not an official ClockworkPi, Arch Linux, or Arch Linux ARM image. Treat it as a reproducible field guide and inspect the scripts before writing any storage device.
+This is not an official ClockworkPi, Arch Linux, or Arch Linux ARM image. The scripts are destructive when pointed at a disk. Read them before running them.
 
 ## What This Builds
 
 The recommended path is `prepare-arch-uconsole-btrfs-sd.sh`. It creates:
 
-- A bootable microSD for uConsole using the Arch Linux ARM Raspberry Pi aarch64 root filesystem.
+- A bootable uConsole microSD from the Arch Linux ARM Raspberry Pi aarch64 rootfs.
 - A FAT32 boot partition labeled `ALARMBOOT`.
-- A Btrfs root partition labeled `ALARMROOT` with `@`, `@home`, and `@snapshots` subvolumes.
-- uConsole vendor boot firmware and kernel modules from the ClockworkPi image.
-- ClockworkPi support files for audio, shutdown audio cleanup, backlight, charging, and 4G module power control.
-- A small i3 desktop with LightDM, Alacritty, Rofi, bumblebee-status, NetworkManager, SSH, ModemManager, and a configurable normal user.
-- Zsh as the normal user's shell, Oh My Zsh installed in that user's home, and the Oh My Zsh `agnoster` prompt theme enabled.
+- A Btrfs root partition labeled `ALARMROOT` with `@`, `@home`, and `@snapshots`.
+- uConsole vendor firmware, overlays, and kernel modules from the ClockworkPi image.
+- ClockworkPi support files for audio, shutdown audio cleanup, backlight, charging rules, and CM4 4G power control.
+- A configured Arch Linux ARM userspace managed by Ansible.
 
-There is also an older ext4 script, `prepare-arch-uconsole-sd.sh`, kept for reference. Use the Btrfs script unless you specifically want ext4.
+The Ansible playbook installs and configures:
 
-## Hardware Target
+- NetworkManager, ModemManager, OpenSSH, LightDM, i3, Rofi, Alacritty, and bumblebee-status.
+- A configurable first user, defaulting to `uconsole`.
+- zsh as the first user's login shell.
+- Oh My Zsh in the first user's home with `ZSH_THEME="agnoster"`.
+- An i3 session with uConsole display rotation and a bumblebee-status `powerline` bar.
+- The ClockworkPi audio services and uConsole 4G service when the support files are present.
 
-This was built for a ClockworkPi uConsole Raspberry Pi CM4-style setup with the 4G module. The support archive we used contains ClockworkPi uConsole overlays and a `uconsole-4g-cm4` systemd service. CM5 may need adjusted firmware, overlays, or kernel modules.
-
-## Host Requirements
-
-Use a Linux host. The commands below assume Arch Linux on the host:
-
-```sh
-sudo pacman -S --needed arch-install-scripts dosfstools btrfs-progs libarchive util-linux qemu-user-static qemu-user-static-binfmt
-sudo systemctl restart systemd-binfmt
-```
-
-You also need:
-
-- A microSD card or other removable target device.
-- The Arch Linux ARM Raspberry Pi aarch64 root filesystem tarball.
-- A ClockworkPi/uConsole vendor firmware and kernel-module archive.
-- A small ClockworkPi support-file archive.
-- Internet access from the build host/chroot for `pacman` and the Oh My Zsh GitHub clone.
-
-The scripts are intentionally destructive and refuse to run unless you pass an explicit wipe confirmation.
+There is also an older ext4 writer, `prepare-arch-uconsole-sd.sh`. Use the Btrfs writer unless you specifically want ext4.
 
 ## Repository Layout
 
 ```text
 .
-├── prepare-arch-uconsole-btrfs-sd.sh   # recommended full image builder
-├── prepare-arch-uconsole-sd.sh         # older ext4 image builder
-├── finish-uconsole-target.sh           # legacy on-target finishing helper
-├── cache/                              # local ALARM tarball goes here
-└── backups/clockworkpi-20260430/       # local ClockworkPi support archives go here
+├── ansible/
+│   ├── playbooks/uconsole-rootfs.yml
+│   ├── roles/uconsole_rootfs/
+│   └── vault/uconsole-secrets.example.yml
+├── scripts/test-ansible.sh
+├── prepare-arch-uconsole-btrfs-sd.sh
+├── prepare-arch-uconsole-sd.sh
+├── finish-uconsole-target.sh
+├── cache/
+└── backups/clockworkpi-20260430/
 ```
 
-The `cache/` and `backups/` contents are ignored by git because they are large upstream/vendor artifacts.
+`cache/`, `backups/`, `work/`, and local Vault files are ignored by git. The repo should contain automation and documentation, not downloaded root filesystems, vendor archives, or secrets.
 
-## Prepare the Inputs
+## Host Requirements
+
+Use a Linux host. On Arch Linux:
+
+```sh
+sudo pacman -S --needed \
+  ansible ansible-core yamllint \
+  arch-install-scripts dosfstools btrfs-progs libarchive util-linux \
+  qemu-user-static qemu-user-static-binfmt
+sudo systemctl restart systemd-binfmt
+```
+
+The setup uses only `ansible-core` modules and normal host commands. It does not require a Galaxy collection. The playbook is host-side: it configures a mounted ARM rootfs through `arch-chroot`, with `qemu-aarch64-static` copied into the target rootfs by the script.
+
+## Prepare Inputs
 
 Download the Arch Linux ARM Raspberry Pi aarch64 root filesystem:
 
@@ -68,37 +72,15 @@ curl -L -o cache/ArchLinuxARM-rpi-aarch64-latest.tar.gz.sig \
   http://os.archlinuxarm.org/os/ArchLinuxARM-rpi-aarch64-latest.tar.gz.sig
 ```
 
-Verify the download if you have the Arch Linux ARM keyring/trust path configured:
+Verify the download if your Arch Linux ARM key trust is configured:
 
 ```sh
 md5sum -c cache/ArchLinuxARM-rpi-aarch64-latest.tar.gz.md5
-gpg --verify cache/ArchLinuxARM-rpi-aarch64-latest.tar.gz.sig cache/ArchLinuxARM-rpi-aarch64-latest.tar.gz
+gpg --verify cache/ArchLinuxARM-rpi-aarch64-latest.tar.gz.sig \
+  cache/ArchLinuxARM-rpi-aarch64-latest.tar.gz
 ```
 
-Create the ClockworkPi support archives from a working stock uConsole image or a mounted copy of one. From the root of that filesystem, the support archive should contain these paths:
-
-```text
-boot/firmware/config.txt
-boot/firmware/cmdline.txt
-boot/firmware/overlays/clockworkpi-uconsole.dtbo
-boot/firmware/overlays/clockworkpi-uconsole-cm3.dtbo
-boot/firmware/overlays/clockworkpi-uconsole-cm5.dtbo
-boot/firmware/overlays/clockworkpi-devterm.dtbo
-boot/firmware/overlays/clockworkpi-devterm-cm5.dtbo
-boot/firmware/overlays/clockworkpi-custom-battery.dtbo
-etc/systemd/system/clockworkpi-audio-patch.service
-etc/systemd/system/clockworkpi-audio-shutdown.service
-etc/systemd/system/uconsole-4g-cm4.service
-etc/udev/rules.d/100-backlight.rules
-etc/udev/rules.d/99-uconsole-charging.rules
-usr/local/bin/audio_3.5_patch.py
-usr/local/bin/clockworkpi-audio-shutdown.sh
-usr/local/bin/rpi-backlight
-usr/local/bin/rpi-backlight-check
-usr/local/bin/uconsole-4g-cm4
-```
-
-Example command from inside the mounted stock root filesystem:
+Create the ClockworkPi support archive from a mounted stock uConsole image. From the root of that filesystem:
 
 ```sh
 sudo tar -czf /tmp/clockworkpi-current-support-files.tar.gz \
@@ -122,7 +104,7 @@ sudo tar -czf /tmp/clockworkpi-current-support-files.tar.gz \
   usr/local/bin/uconsole-4g-cm4
 ```
 
-The vendor boot/kernel archive should contain the vendor boot firmware and the matching kernel modules. The script currently expects the module directory `lib/modules/6.12.62-v8+`:
+Create the vendor boot/kernel archive. The current scripts expect `lib/modules/6.12.62-v8+`:
 
 ```sh
 sudo tar -czf /tmp/uconsole-vendor-boot-kernel.tar.gz \
@@ -130,18 +112,65 @@ sudo tar -czf /tmp/uconsole-vendor-boot-kernel.tar.gz \
   lib/modules/6.12.62-v8+
 ```
 
-Copy both archives into the expected local paths:
+Copy both archives into place:
 
 ```sh
 cp /tmp/clockworkpi-current-support-files.tar.gz backups/clockworkpi-20260430/
 cp /tmp/uconsole-vendor-boot-kernel.tar.gz backups/clockworkpi-20260430/
 ```
 
-You can use different paths by setting `TARBALL=`, `SUPPORT_TAR=`, and `VENDOR_BOOT_TAR=` when running the prep script.
+You can override paths with `TARBALL=`, `SUPPORT_TAR=`, and `VENDOR_BOOT_TAR=`.
+
+## Manage Secrets With Ansible Vault
+
+Do not put passwords in git or shell history. Use Ansible Vault for the first user and password:
+
+```sh
+cp ansible/vault/uconsole-secrets.example.yml ansible/vault/uconsole-secrets.yml
+vim ansible/vault/uconsole-secrets.yml
+ansible-vault encrypt ansible/vault/uconsole-secrets.yml
+```
+
+The file should define:
+
+```yaml
+uconsole_user: youruser
+uconsole_password: your-temporary-first-boot-password
+```
+
+Useful Vault commands:
+
+```sh
+ansible-vault view ansible/vault/uconsole-secrets.yml
+ansible-vault edit ansible/vault/uconsole-secrets.yml
+ansible-vault decrypt ansible/vault/uconsole-secrets.yml
+ansible-vault encrypt ansible/vault/uconsole-secrets.yml
+```
+
+For unattended runs, store the Vault password outside the repo and pass it with `ANSIBLE_VAULT_PASSWORD_FILE=/path/to/vault-pass`. If you omit `ANSIBLE_VAULT_PASSWORD_FILE`, the prep script will ask for the Vault password.
+
+## Test Before Writing a Card
+
+Run the Ansible test gate:
+
+```sh
+scripts/test-ansible.sh
+```
+
+This performs:
+
+- `ansible-playbook --syntax-check`
+- `yamllint ansible`
+- A qemu `aarch64` smoke check from the cached Arch Linux ARM tarball when the tarball is present
+- An Ansible fixture run against a temporary fake rootfs under `work/`
+- A temporary encrypted Ansible Vault vars file to prove encrypted secrets are ingested correctly
+- Assertions that generated hostname, console, mkinitcpio, zsh, i3, and helper files are present
+
+The test does not touch a real uConsole or any Tailscale device.
 
 ## Write the microSD
 
-Find the correct target disk. Use the disk path, not a partition path:
+Find the correct disk. Use the disk path, not a partition path:
 
 ```sh
 lsblk -o NAME,PATH,SIZE,TYPE,TRAN,MODEL,FSTYPE,LABEL,MOUNTPOINTS,RM,RO
@@ -153,49 +182,87 @@ Unmount anything mounted from the card:
 sudo umount /dev/sdX1 /dev/sdX2 2>/dev/null || true
 ```
 
-Run the Btrfs builder:
+Run the Btrfs writer with your encrypted Vault file:
 
 ```sh
 sudo -E env \
-  UCONSOLE_PASSWORD='change-this-password' \
-  UCONSOLE_USER='uconsole' \
+  ANSIBLE_VAULT_FILE="$PWD/ansible/vault/uconsole-secrets.yml" \
+  ANSIBLE_VAULT_PASSWORD_FILE="/secure/path/uconsole-vault-pass" \
+  I_UNDERSTAND_THIS_WIPES=YES \
+  ./prepare-arch-uconsole-btrfs-sd.sh /dev/sdX
+```
+
+If you want an interactive Vault prompt, omit `ANSIBLE_VAULT_PASSWORD_FILE`:
+
+```sh
+sudo -E env \
+  ANSIBLE_VAULT_FILE="$PWD/ansible/vault/uconsole-secrets.yml" \
   I_UNDERSTAND_THIS_WIPES=YES \
   ./prepare-arch-uconsole-btrfs-sd.sh /dev/sdX
 ```
 
 Replace `/dev/sdX` with the actual removable disk. The script refuses NVMe devices and refuses non-removable disks unless `ALLOW_NON_REMOVABLE=1` is explicitly set.
 
-`UCONSOLE_USER` is optional and defaults to `uconsole`. The password is applied to both `root` and that normal user. Change both passwords on first boot:
+The legacy environment fallback still exists for quick local experiments:
+
+```sh
+sudo -E env \
+  UCONSOLE_USER='uconsole' \
+  UCONSOLE_PASSWORD='change-this-password' \
+  I_UNDERSTAND_THIS_WIPES=YES \
+  ./prepare-arch-uconsole-btrfs-sd.sh /dev/sdX
+```
+
+Prefer Ansible Vault for any real setup.
+
+## Run Only the Playbook
+
+If you already have an extracted and mounted rootfs, run the playbook directly:
+
+```sh
+ansible-playbook ansible/playbooks/uconsole-rootfs.yml \
+  --vault-password-file /secure/path/uconsole-vault-pass \
+  -e @ansible/vault/uconsole-secrets.yml \
+  -e target_root=/mnt/uconsole-arch-root \
+  -e uconsole_rootfs_type=btrfs
+```
+
+For non-mutating template/render checks against a fixture:
+
+```sh
+ansible-playbook ansible/playbooks/uconsole-rootfs.yml \
+  --vault-password-file /secure/path/uconsole-vault-pass \
+  -e @ansible/vault/uconsole-secrets.yml \
+  -e target_root=/path/to/rootfs-fixture \
+  -e uconsole_rootfs_type=btrfs \
+  -e uconsole_run_chroot_commands=false
+```
+
+## First Boot Checks
+
+After booting the uConsole:
 
 ```sh
 passwd
-passwd uconsole
-```
-
-## First Boot
-
-Insert the card into the uConsole and boot. Expected defaults:
-
-- Hostname: `arch-uconsole`
-- User: `uconsole` by default, or whatever you set with `UCONSOLE_USER`
-- Shell: zsh with Oh My Zsh and `ZSH_THEME="agnoster"`
-- Desktop: LightDM into i3
-- Terminal: Alacritty
-- i3 bar: bumblebee-status with the built-in `powerline` theme. The live reference setup used an Agnoster-style zsh prompt; bumblebee-status itself does not ship an `agnoster` theme name.
-- SSH: enabled
-- Networking: NetworkManager enabled
-- 4G management: ModemManager and `uconsole-4g-cm4.service` enabled
-
-Useful checks on the uConsole:
-
-```sh
 systemctl status NetworkManager ModemManager uconsole-4g-cm4
 mmcli -L
 ip addr
 rpi-backlight-check
 ```
 
-If the 4G modem does not appear, check the power helper and logs:
+Expected defaults:
+
+- Hostname: `arch-uconsole`
+- User: value of `uconsole_user` from Vault, or `uconsole`
+- Shell: zsh with Oh My Zsh and `ZSH_THEME="agnoster"`
+- Desktop: LightDM into i3
+- Terminal launcher: Alacritty
+- App launcher: Rofi
+- Status bar: bumblebee-status with its built-in `powerline` theme
+- Network: NetworkManager
+- 4G: ModemManager plus `uconsole-4g-cm4.service`
+
+If the modem does not appear:
 
 ```sh
 sudo systemctl restart uconsole-4g-cm4
@@ -203,50 +270,25 @@ journalctl -u uconsole-4g-cm4 -b
 mmcli -L
 ```
 
-## What the Script Changes
+## What the Disk Script Does
 
-The prep script:
+The Btrfs writer:
 
-1. Wipes and repartitions the target disk.
-2. Formats boot as FAT32 and root as Btrfs.
-3. Extracts the Arch Linux ARM root filesystem.
-4. Moves the original ALARM boot files under `/boot/archlinuxarm`.
-5. Copies ClockworkPi vendor boot firmware into `/boot`.
-6. Copies vendor kernel modules for `6.12.62-v8+`.
-7. Writes `cmdline.txt` for the new root `PARTUUID`.
-8. Writes `/etc/fstab`, hostname, and console defaults.
-9. Uses `arch-chroot` plus `qemu-aarch64-static` to initialize pacman and install packages.
-10. Generates a Btrfs-capable initramfs for the vendor kernel.
-11. Creates the normal user and enables sudo for `wheel`.
-12. Installs zsh, clones Oh My Zsh, writes an `agnoster` `.zshrc`, and sets the normal user's login shell to zsh.
-13. Installs a minimal i3 session with Rofi, Alacritty, display rotation for the uConsole panel, and bumblebee-status.
-14. Enables SSH, NetworkManager, ModemManager, LightDM, ClockworkPi audio services, and the uConsole 4G power service.
+1. Refuses ambiguous or dangerous targets.
+2. Wipes and partitions the selected disk.
+3. Formats boot as FAT32 and root as Btrfs.
+4. Creates Btrfs subvolumes.
+5. Extracts the Arch Linux ARM rootfs.
+6. Copies uConsole vendor boot firmware and kernel modules.
+7. Copies ClockworkPi support files.
+8. Writes `cmdline.txt`, `fstab`, and base boot configuration.
+9. Mounts the target rootfs for chroot operation.
+10. Calls `ansible-playbook` to configure userspace, packages, user shell, desktop, initramfs, and services.
 
-## Troubleshooting
+## Notes for Maintainers
 
-If `arch-chroot` cannot execute `/bin/bash`, make sure qemu binfmt support is active on the host:
-
-```sh
-sudo systemctl restart systemd-binfmt
-ls /proc/sys/fs/binfmt_misc
-```
-
-If pacman fails during the chroot, check host networking and DNS. The script copies the host `/etc/resolv.conf` into the target before chrooting.
-
-If Btrfs boot fails, confirm `/boot/config.txt` contains:
-
-```text
-initramfs initramfs-uconsole.img followkernel
-```
-
-And confirm `/boot/cmdline.txt` contains:
-
-```text
-rootfstype=btrfs rootflags=subvol=@
-```
-
-If display, keyboard, battery, audio, or 4G controls are missing, the ClockworkPi support archives are probably incomplete or from a mismatched vendor image.
-
-## Publishing Notes
-
-Do not commit the downloaded ALARM root filesystem or ClockworkPi/vendor tarballs. Keep this repository to scripts and documentation, and let users obtain upstream/vendor artifacts themselves.
+- Keep secrets in Ansible Vault, not in git.
+- Keep downloaded ALARM and vendor artifacts out of git.
+- Prefer editing the Ansible role over adding more inline shell to the disk writers.
+- The live reference setup was checked on `archiechokie`, but this repo must not require access to that device.
+- Official Ansible references used for this structure: `ansible-playbook --syntax-check`, check/diff mode, and `ansible.builtin.copy`/template behavior.

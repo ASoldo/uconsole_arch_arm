@@ -1,0 +1,7 @@
+---
+- name: Configure a mounted uConsole Arch Linux ARM rootfs
+  hosts: localhost
+  gather_facts: false
+
+  roles:
+    - role: uconsole_rootfs

@@ -1,0 +1,41 @@
+set $mod {{ uconsole_i3_modifier }}
+font pango:DejaVu Sans Mono 9
+
+{% if uconsole_i3_rotate_display %}
+exec_always --no-startup-id xrandr --output {{ uconsole_i3_display_output }} --primary --rotate right
+{% endif %}
+
+bindsym $mod+Return exec alacritty
+bindsym $mod+KP_Enter exec alacritty
+bindsym $mod+space exec rofi -show drun
+bindsym $mod+d exec rofi -show drun
+bindsym $mod+f fullscreen toggle
+bindsym $mod+Shift+q kill
+bindsym $mod+Shift+r restart
+bindsym $mod+Shift+e exec "i3-nagbar -t warning -m 'Exit i3?' -b 'Yes' 'i3-msg exit'"
+
+floating_modifier $mod
+bindsym $mod+h focus left
+bindsym $mod+j focus down
+bindsym $mod+k focus up
+bindsym $mod+l focus right
+bindsym $mod+Shift+h move left
+bindsym $mod+Shift+j move down
+bindsym $mod+Shift+k move up
+bindsym $mod+Shift+l move right
+
+bindsym $mod+1 workspace number 1
+bindsym $mod+2 workspace number 2
+bindsym $mod+3 workspace number 3
+bindsym $mod+4 workspace number 4
+bindsym $mod+5 workspace number 5
+bindsym $mod+Shift+1 move container to workspace number 1
+bindsym $mod+Shift+2 move container to workspace number 2
+bindsym $mod+Shift+3 move container to workspace number 3
+bindsym $mod+Shift+4 move container to workspace number 4
+bindsym $mod+Shift+5 move container to workspace number 5
+
+bar {
+  position top
+  status_command bumblebee-status -m cpu memory battery date time -t {{ uconsole_bumblebee_theme }} -p time.format="%H:%M" date.format="%Y-%m-%d"
+}
