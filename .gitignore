@@ -1,0 +1,16 @@
+# Local build inputs.
+# These are large upstream/vendor artifacts and should not be committed here.
+/cache/*
+!/cache/.gitkeep
+/backups/*
+!/backups/.gitkeep
+!/backups/clockworkpi-20260430/
+/backups/clockworkpi-20260430/*
+!/backups/clockworkpi-20260430/.gitkeep
+
+# Temporary mount/extract workspace.
+/work/
+
+# Editor and OS noise.
+*~
+.DS_Store
