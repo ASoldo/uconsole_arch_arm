@@ -154,7 +154,8 @@ set -euo pipefail
 pacman-key --init
 pacman-key --populate archlinuxarm
 pacman -Syu --noconfirm
-pacman -S --needed --noconfirm sudo networkmanager modemmanager openssh linux-firmware xorg-server xorg-xinit xorg-xrandr xorg-xsetroot xorg-xinput xterm alacritty lightdm lightdm-gtk-greeter i3-wm i3status rofi python python-gobject ttf-dejavu terminus-font vim nano git
+pacman -S --needed --noconfirm sudo networkmanager modemmanager openssh linux-firmware xorg-server xorg-xinit xorg-xrandr xorg-xsetroot xorg-xinput xterm alacritty lightdm lightdm-gtk-greeter i3-wm i3status rofi python python-gobject ttf-dejavu terminus-font vim nano git zsh inetutils
+pacman -S --needed --noconfirm powerline-fonts || true
 pacman -S --needed --noconfirm raspberrypi-utils || true
 if ! pacman -S --needed --noconfirm bumblebee-status; then
   pacman -S --needed --noconfirm python-pip
@@ -169,23 +170,52 @@ for group in wheel audio video input render storage power uucp users; do
 done
 group_csv="$(IFS=,; printf '%s' "${groups_to_add[*]}")"
 if ! id "$UCONSOLE_USER" >/dev/null 2>&1; then
-  useradd -m -G "$group_csv" -s /bin/bash "$UCONSOLE_USER"
+  useradd -m -G "$group_csv" -s /usr/bin/zsh "$UCONSOLE_USER"
 else
   usermod -aG "$group_csv" "$UCONSOLE_USER"
+  usermod -s /usr/bin/zsh "$UCONSOLE_USER"
 fi
 printf 'root:%s\n%s:%s\n' "$UCONSOLE_PASSWORD" "$UCONSOLE_USER" "$UCONSOLE_PASSWORD" | chpasswd
 sed -i 's/^# %wheel ALL=(ALL:ALL) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
 
-install -d -m 0755 "/home/$UCONSOLE_USER/.config/i3"
-cat > "/home/$UCONSOLE_USER/.xinitrc" <<'EOF'
+user_home="/home/$UCONSOLE_USER"
+if [[ ! -d "$user_home/.oh-my-zsh" ]]; then
+  git clone --depth 1 https://github.com/ohmyzsh/ohmyzsh.git "$user_home/.oh-my-zsh"
+fi
+cat > "$user_home/.zshrc" <<'EOF'
+export ZSH="$HOME/.oh-my-zsh"
+export LANG="${LANG:-C.UTF-8}"
+[[ "$LANG" = "C" ]] && export LANG="C.UTF-8"
+export LC_CTYPE="${LC_CTYPE:-C.UTF-8}"
+ZSH_THEME="agnoster"
+plugins=(git)
+
+if [[ -s "$ZSH/oh-my-zsh.sh" ]]; then
+  source "$ZSH/oh-my-zsh.sh"
+fi
+
+export EDITOR="vim"
+export VISUAL="vim"
+export PAGER="less"
+path=("$HOME/.local/bin" "$HOME/bin" $path)
+typeset -U path PATH
+EOF
+
+install -d -m 0755 "$user_home/.config/i3"
+cat > "$user_home/.xinitrc" <<'EOF'
 exec i3
 EOF
-cat > "/home/$UCONSOLE_USER/.config/i3/config" <<'EOF'
-set $mod Mod4
+cat > "$user_home/.config/i3/config" <<'EOF'
+set $mod Mod1
 font pango:DejaVu Sans Mono 9
 
+exec_always --no-startup-id xrandr --output DSI-1 --primary --rotate right
+
 bindsym $mod+Return exec alacritty
+bindsym $mod+KP_Enter exec alacritty
+bindsym $mod+space exec rofi -show drun
 bindsym $mod+d exec rofi -show drun
+bindsym $mod+f fullscreen toggle
 bindsym $mod+Shift+q kill
 bindsym $mod+Shift+r restart
 bindsym $mod+Shift+e exec "i3-nagbar -t warning -m 'Exit i3?' -b 'Yes' 'i3-msg exit'"
@@ -212,10 +242,11 @@ bindsym $mod+Shift+4 move container to workspace number 4
 bindsym $mod+Shift+5 move container to workspace number 5
 
 bar {
-  status_command bumblebee-status -m cpu memory battery date time -p time.format="%H:%M" date.format="%Y-%m-%d"
+  position top
+  status_command bumblebee-status -m cpu memory battery date time -t powerline -p time.format="%H:%M" date.format="%Y-%m-%d"
 }
 EOF
-chown -R "$UCONSOLE_USER:$UCONSOLE_USER" "/home/$UCONSOLE_USER/.config" "/home/$UCONSOLE_USER/.xinitrc"
+chown -R "$UCONSOLE_USER:$UCONSOLE_USER" "$user_home/.config" "$user_home/.xinitrc" "$user_home/.zshrc" "$user_home/.oh-my-zsh"
 
 systemctl enable sshd NetworkManager ModemManager lightdm clockworkpi-audio-patch.service clockworkpi-audio-shutdown.service uconsole-4g-cm4.service
 CHROOT

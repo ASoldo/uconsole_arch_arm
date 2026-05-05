@@ -13,7 +13,8 @@ The recommended path is `prepare-arch-uconsole-btrfs-sd.sh`. It creates:
 - A Btrfs root partition labeled `ALARMROOT` with `@`, `@home`, and `@snapshots` subvolumes.
 - uConsole vendor boot firmware and kernel modules from the ClockworkPi image.
 - ClockworkPi support files for audio, shutdown audio cleanup, backlight, charging, and 4G module power control.
-- A small i3 desktop with LightDM, Alacritty, Rofi, NetworkManager, SSH, ModemManager, and a configurable normal user.
+- A small i3 desktop with LightDM, Alacritty, Rofi, bumblebee-status, NetworkManager, SSH, ModemManager, and a configurable normal user.
+- Zsh as the normal user's shell, Oh My Zsh installed in that user's home, and the Oh My Zsh `agnoster` prompt theme enabled.
 
 There is also an older ext4 script, `prepare-arch-uconsole-sd.sh`, kept for reference. Use the Btrfs script unless you specifically want ext4.
 
@@ -36,6 +37,7 @@ You also need:
 - The Arch Linux ARM Raspberry Pi aarch64 root filesystem tarball.
 - A ClockworkPi/uConsole vendor firmware and kernel-module archive.
 - A small ClockworkPi support-file archive.
+- Internet access from the build host/chroot for `pacman` and the Oh My Zsh GitHub clone.
 
 The scripts are intentionally destructive and refuse to run unless you pass an explicit wipe confirmation.
 
@@ -176,8 +178,10 @@ Insert the card into the uConsole and boot. Expected defaults:
 
 - Hostname: `arch-uconsole`
 - User: `uconsole` by default, or whatever you set with `UCONSOLE_USER`
+- Shell: zsh with Oh My Zsh and `ZSH_THEME="agnoster"`
 - Desktop: LightDM into i3
 - Terminal: Alacritty
+- i3 bar: bumblebee-status with the built-in `powerline` theme. The live reference setup used an Agnoster-style zsh prompt; bumblebee-status itself does not ship an `agnoster` theme name.
 - SSH: enabled
 - Networking: NetworkManager enabled
 - 4G management: ModemManager and `uconsole-4g-cm4.service` enabled
@@ -214,8 +218,9 @@ The prep script:
 9. Uses `arch-chroot` plus `qemu-aarch64-static` to initialize pacman and install packages.
 10. Generates a Btrfs-capable initramfs for the vendor kernel.
 11. Creates the normal user and enables sudo for `wheel`.
-12. Installs a minimal i3 session.
-13. Enables SSH, NetworkManager, ModemManager, LightDM, ClockworkPi audio services, and the uConsole 4G power service.
+12. Installs zsh, clones Oh My Zsh, writes an `agnoster` `.zshrc`, and sets the normal user's login shell to zsh.
+13. Installs a minimal i3 session with Rofi, Alacritty, display rotation for the uConsole panel, and bumblebee-status.
+14. Enables SSH, NetworkManager, ModemManager, LightDM, ClockworkPi audio services, and the uConsole 4G power service.
 
 ## Troubleshooting
 
